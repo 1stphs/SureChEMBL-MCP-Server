@@ -6,14 +6,14 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install all dependencies (including dev dependencies for building)
-RUN npm ci
+# Install all dependencies, skip prepare script (we'll build manually after copying source)
+RUN npm ci --ignore-scripts
 
 # Copy source files
 COPY tsconfig.json ./
 COPY src ./src
 
-# Build the project
+# Build the project manually
 RUN npm run build
 
 # Production stage
