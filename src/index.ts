@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -11,6 +12,11 @@ import {
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import axios, { AxiosInstance } from 'axios';
+import express, { Request, Response } from 'express';
+import cors from 'cors';
+
+// SSE Configuration
+const SSE_PORT = process.env.SSE_PORT ? parseInt(process.env.SSE_PORT) : 8106;
 
 // SureChEMBL API interfaces
 interface ChemicalSearchResult {
@@ -617,7 +623,31 @@ class SureChEMBLServer {
           },
         ],
       };
-    } catch (error) {
+    } catch (error: any) {
+      // Handle API errors more gracefully
+      if (error.response) {
+        const status = error.response.status;
+        const apiError = error.response.data;
+
+        if (status === 400) {
+          // Chemical not found or invalid query
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  query: args.query,
+                  status: 'NOT_FOUND',
+                  message: `No results found for "${args.query}". The chemical may not exist in SureChEMBL database, or the query format is invalid.`,
+                  suggestion: 'Try searching with a simpler chemical name (e.g., "aspirin", "ibuprofen") or use SMILES/InChI identifiers.',
+                  api_error: apiError?.error_message || 'Unknown API error'
+                }, null, 2),
+              },
+            ],
+          };
+        }
+      }
+
       throw new McpError(
         ErrorCode.InternalError,
         `Failed to search patents: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -714,7 +744,26 @@ class SureChEMBLServer {
           },
         ],
       };
-    } catch (error) {
+    } catch (error: any) {
+      // Handle API errors more gracefully
+      if (error.response && error.response.status === 400) {
+        const apiError = error.response.data;
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                name: args.name,
+                status: 'NOT_FOUND',
+                message: `No chemical found with name "${args.name}". The chemical may not exist in SureChEMBL database.`,
+                suggestion: 'Try searching with a simpler or alternative chemical name, or use the chemical ID if known.',
+                api_error: apiError?.error_message || 'Unknown API error'
+              }, null, 2),
+            },
+          ],
+        };
+      }
+
       throw new McpError(
         ErrorCode.InternalError,
         `Failed to search chemicals: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -1189,7 +1238,7 @@ class SureChEMBLServer {
           total_chemical_annotations: chemicalAnnotations.length,
           unique_chemicals_count: uniqueChemicals.length,
           most_frequent_chemicals: Object.entries(chemicalFrequencies)
-            .sort(([,a], [,b]) => (b as number) - (a as number))
+            .sort(([, a], [, b]) => (b as number) - (a as number))
             .slice(0, 10)
             .map(([name, count]) => ({ name, count })),
           annotation_sources: {
@@ -1251,7 +1300,100 @@ class SureChEMBLServer {
     await this.server.connect(transport);
     console.error('SureChEMBL MCP server running on stdio');
   }
+
+  async runSSE() {
+    const app = express();
+
+    // Enable CORS for all origins
+    app.use(cors({
+      origin: '*',
+      methods: ['GET', 'POST', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    }));
+
+    // NOTE: Do NOT use express.json() globally as it consumes the request stream
+    // SSEServerTransport needs to read the raw request body itself
+
+    // Store active transports by session ID (will be set after transport is connected)
+    const transports = new Map<string, SSEServerTransport>();
+
+    // Health check endpoint
+    app.get('/health', (_req: Request, res: Response) => {
+      res.json({ status: 'ok', mode: 'sse', port: SSE_PORT });
+    });
+
+    // SSE endpoint for establishing connection
+    app.get('/sse', async (req: Request, res: Response) => {
+      console.error('New SSE connection requested');
+
+      // Create SSE transport - SDK will auto-generate sessionId and append to /messages
+      const transport = new SSEServerTransport('/messages', res);
+
+      // The SDK transport has a private _sessionId that gets added to the endpoint URL
+      // We need to access it after connecting to store the mapping
+      // Using type assertion to access private property
+      const sessionId = (transport as any)._sessionId as string;
+      transports.set(sessionId, transport);
+
+      console.error(`SSE connection established, session: ${sessionId}`);
+
+      // Connect the server to this transport
+      await this.server.connect(transport);
+
+      // Handle client disconnect
+      req.on('close', () => {
+        console.error(`SSE connection closed, session: ${sessionId}`);
+        transports.delete(sessionId);
+      });
+    });
+
+    // Message endpoint for receiving client messages
+    app.post('/messages', async (req: Request, res: Response) => {
+      // Get session ID from query parameter (added by SDK)
+      const sessionId = req.query.sessionId as string;
+
+      if (!sessionId) {
+        console.error('No sessionId provided in request');
+        res.status(400).json({ error: 'Missing sessionId query parameter' });
+        return;
+      }
+
+      const transport = transports.get(sessionId);
+
+      if (!transport) {
+        console.error(`No transport found for session: ${sessionId}`);
+        res.status(400).json({ error: 'No active SSE connection for this session' });
+        return;
+      }
+
+      try {
+        await transport.handlePostMessage(req, res);
+      } catch (error) {
+        console.error(`Error handling message for session ${sessionId}:`, error);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Internal server error' });
+        }
+      }
+    });
+
+    // Start the server
+    app.listen(SSE_PORT, () => {
+      console.error(`SureChEMBL MCP server running on SSE mode at http://localhost:${SSE_PORT}`);
+      console.error(`SSE endpoint: http://localhost:${SSE_PORT}/sse`);
+      console.error(`Messages endpoint: http://localhost:${SSE_PORT}/messages`);
+      console.error(`Health check: http://localhost:${SSE_PORT}/health`);
+    });
+  }
 }
 
+// Parse command line arguments
+const args = process.argv.slice(2);
+const useSSE = args.includes('--sse') || args.includes('-s') || process.env.MCP_TRANSPORT === 'sse';
+
 const server = new SureChEMBLServer();
-server.run().catch(console.error);
+
+if (useSSE) {
+  server.runSSE().catch(console.error);
+} else {
+  server.run().catch(console.error);
+}

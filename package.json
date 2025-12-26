@@ -16,7 +16,9 @@
     "watch": "tsc --watch",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js",
     "start": "node build/index.js",
-    "dev": "tsc --watch"
+    "start:sse": "node build/index.js --sse",
+    "dev": "tsc --watch",
+    "dev:sse": "npm run build && npm run start:sse"
   },
   "keywords": [
     "mcp",
@@ -39,9 +41,13 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "0.6.0",
-    "axios": "^1.10.0"
+    "axios": "^1.10.0",
+    "cors": "^2.8.5",
+    "express": "^5.2.1"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/node": "^20.11.24",
     "typescript": "^5.3.3"
   },
