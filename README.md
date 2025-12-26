@@ -42,10 +42,10 @@ npm run start:sse
 
 ```bash
 # 1. 构建并启动服务
-docker-compose up -d --build
+docker compose up -d --build
 
 # 2. 查看日志
-docker-compose logs -f
+docker compose logs -f
 
 # 3. 检查服务状态
 curl http://localhost:8106/health
@@ -58,7 +58,7 @@ curl http://localhost:8106/health
 git pull
 
 # 2. 重新构建并启动
-docker-compose up -d --build
+docker compose up -d --build
 
 # 3. 清理旧镜像 (可选)
 docker image prune -f
@@ -68,23 +68,23 @@ docker image prune -f
 
 ```bash
 # 停止服务
-docker-compose down
+docker compose down
 
 # 停止并删除数据卷
-docker-compose down -v
+docker compose down -v
 ```
 
 ### 查看日志
 
 ```bash
 # 实时查看日志
-docker-compose logs -f
+docker compose logs -f
 
 # 查看最近 100 行日志
-docker-compose logs --tail=100
+docker compose logs --tail=100
 ```
 
-### 单独使用 Docker (不使用 docker-compose)
+### 单独使用 Docker (不使用 docker compose)
 
 ```bash
 # 构建镜像
@@ -187,7 +187,7 @@ SSE URL: http://<your-server-ip>:8106/sse
 lsof -i :8106
 
 # 查看 Docker 日志
-docker-compose logs
+docker compose logs
 ```
 
 ### 连接问题
@@ -204,8 +204,8 @@ curl -N http://localhost:8106/sse
 
 ```bash
 # 完全重置
-docker-compose down -v
-docker-compose up -d --build
+docker compose down -v
+docker compose up -d --build
 ```
 
 ---
